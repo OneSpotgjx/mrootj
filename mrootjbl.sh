@@ -1,8 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# 安卓Fastboot工具箱（锁定单设备版）
-# 核心流程：安装依赖 → 选第一台设备 → 选VID → 解锁 → 选分区 → 备份 → 刷入 → 重启
-# 特性：选定第一台设备后，全程仅针对该设备操作，无二次选择
-# 前提：两台设备 + USB OTG转接头（主机Termux，被控fastboot模式）
+# 安卓Fastboot工具箱（锁定单设备版，优化依赖安装）
+# 核心流程：安装依赖（仅首次） → 选第一台设备 → 选VID → 解锁 → 选分区 → 备份 → 刷入 → 重启
+# 特性：选定第一台设备后全程锁定；仅在依赖缺失时执行安装，避免重复
 
 # 常量定义
 BACKUP_DIR="$HOME/fastboot_backup"
@@ -11,12 +10,25 @@ TARGET_DEVICE=""
 SELECTED_VID=""
 SELECTED_PARTITION=""
 
-# 1. 安装依赖（优先执行）
+# 1. 安装依赖（仅在缺失时执行，避免重复安装）
 install_deps() {
-    echo -e "\033[32m=== 步骤1：安装必要依赖 ===\033[0m"
-    pkg update -y && pkg upgrade -y && pkg install android-tools termux-api usbutils -y
+    echo -e "\033[32m=== 步骤1：检查并安装必要依赖（仅首次运行安装）===\033[0m"
+    # 检测核心工具是否已安装
+    local deps_ok=1
+    if ! command -v fastboot >/dev/null 2>&1; then deps_ok=0; fi
+    if ! command -v termux-usb >/dev/null 2>&1; then deps_ok=0; fi
+    if ! command -v lsusb >/dev/null 2>&1; then deps_ok=0; fi
+
+    if [ $deps_ok -eq 0 ]; then
+        # 依赖缺失，执行安装
+        pkg update -y && pkg upgrade -y && pkg install android-tools termux-api usbutils -y
+        echo "✅ 依赖安装完成"
+    else
+        echo "✅ 依赖已就绪，跳过重复安装"
+    fi
+    # 确保备份目录存在（无论是否安装依赖）
     mkdir -p $BACKUP_DIR
-    echo "✅ 依赖安装完成，备份目录：$BACKUP_DIR"
+    echo "备份目录：$BACKUP_DIR"
     echo -e "\n当前USB设备列表："
     lsusb
 }
