@@ -1,21 +1,100 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# 安卓Fastboot工具箱（锁定单设备版，优化依赖安装）
-# 核心流程：安装依赖 → 检查设备状态 → 帮助进入fastboot → 选设备 → 选VID → 解锁 → 选分区 → 备份 → 刷入 → 重启
-# 特性：选定第一台设备后全程锁定；仅在依赖缺失时执行安装，避免重复
+# ====================================================
+# 一加Fastboot工具箱 v2.0 - 菜单版
+# 作者: 复活nb666
+# ====================================================
 
 # 常量定义
 BACKUP_DIR="$HOME/fastboot_backup"
-# 全局变量（锁定第一台设备）
+LOG_FILE="$HOME/fastboot_tool.log"
+VERSION="2.0"
+
+# 全局变量
 TARGET_DEVICE=""
 SELECTED_VID=""
 SELECTED_PARTITION=""
-DEVICE_STATE=""  # 设备状态：recovery, fastboot, normal, unauthorized, offline
+DEVICE_STATE=""
+CURRENT_SLOT=""  # 添加当前slot变量
 
-# 1. 安装依赖（仅在缺失时执行，避免重复安装）
+# 颜色定义
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[1;34m'
+PURPLE='\033[1;35m'
+CYAN='\033[1;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
+
+# 日志函数
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    echo "$1"
+}
+
+# 显示标题
+show_header() {
+    clear
+    echo -e "${PURPLE}"
+    echo "========================================"
+    echo "    一加Fastboot工具箱 v$VERSION"
+    echo "    作者: 复活nb666"
+    echo "    启动时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "========================================"
+    echo -e "${NC}"
+    echo -e "${CYAN}笔底相思字生烫，眼底缝光凝霜${NC}"
+    echo -e "${CYAN}爱如苍痕悄爬满，心似古井忽生澜${NC}"
+    echo ""
+}
+
+# 显示菜单
+show_menu() {
+    echo -e "${GREEN}=== 主菜单 ===${NC}"
+    echo ""
+    echo "  1. 安装必要依赖"
+    echo "  2. 检测设备状态"
+    echo "  3. 帮助进入fastboot模式"
+    echo "  4. 选择并锁定设备"
+    echo "  5. 选择VID（设备品牌）"
+    echo "  6. 解锁Bootloader"
+    echo "  7. 选择分区类型"
+    echo "  8. 备份原厂分区"
+    echo "  9. 刷入镜像文件"
+    echo "  10. 一键自动流程"
+    echo "  11. 查看设备信息"
+    echo "  12. 查看备份文件"
+    echo "  13. 清理临时文件"
+    echo "  14. 查看操作日志"
+    echo "  0. 退出系统"
+    echo ""
+    echo -e "${YELLOW}当前状态:${NC}"
+    if [ -n "$TARGET_DEVICE" ]; then
+        echo -e "  📱 设备: ${GREEN}$TARGET_DEVICE${NC}"
+    else
+        echo -e "  📱 设备: ${RED}未选择${NC}"
+    fi
+    if [ -n "$SELECTED_VID" ]; then
+        echo -e "  🔧 VID: ${GREEN}$SELECTED_VID${NC}"
+    else
+        echo -e "  🔧 VID: ${RED}未选择${NC}"
+    fi
+    if [ -n "$SELECTED_PARTITION" ]; then
+        echo -e "  💾 分区: ${GREEN}$SELECTED_PARTITION${NC}"
+    else
+        echo -e "  💾 分区: ${RED}未选择${NC}"
+    fi
+    if [ -n "$CURRENT_SLOT" ]; then
+        echo -e "  🔄 当前Slot: ${GREEN}$CURRENT_SLOT${NC}"
+    fi
+    echo ""
+    echo -e "${BLUE}请输入您的选择 [0-14]:${NC} "
+}
+
+# 1. 安装依赖
 install_deps() {
-    echo -e "\033[32m=== 步骤1：安装必要依赖 ===\033[0m"
+    log "=== 开始安装依赖 ==="
+    echo -e "\n${GREEN}=== 步骤1：安装必要依赖 ===${NC}"
     
-    # 检测核心工具是否已安装
     local deps_missing=()
     
     if ! command -v fastboot >/dev/null 2>&1; then
@@ -39,20 +118,19 @@ install_deps() {
         echo "✅ termux-usb 已安装"
     fi
     
-    # 去重并安装缺失的依赖
     deps_missing=($(echo "${deps_missing[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
     
     if [ ${#deps_missing[@]} -gt 0 ]; then
-        echo -e "\n📦 安装缺失的依赖包..."
-        pkg update -y && pkg upgrade -y
-        pkg install -y "${deps_missing[@]}"
+        echo -e "\n📦 安装缺失的依赖包: ${deps_missing[*]}"
+        echo "这可能需要几分钟时间，请耐心等待..."
         
-        # 验证安装结果
-        if command -v fastboot >/dev/null 2>&1 && command -v adb >/dev/null 2>&1 && command -v termux-usb >/dev/null 2>&1; then
+        if pkg update -y && pkg upgrade -y && pkg install -y "${deps_missing[@]}"; then
             echo "✅ 所有依赖安装完成"
+            log "依赖安装成功"
         else
-            echo "❌ 依赖安装失败，请手动运行：pkg install android-tools termux-api"
-            exit 1
+            echo "❌ 依赖安装失败"
+            log "依赖安装失败"
+            return 1
         fi
     else
         echo "✅ 所有依赖已就绪"
@@ -62,307 +140,169 @@ install_deps() {
     echo -e "\n🔐 请求USB访问权限..."
     if termux-usb -r >/dev/null 2>&1; then
         echo "✅ 请在手机上弹出的窗口中授权USB访问"
-        sleep 3  # 给用户时间点击授权
+        sleep 3
+        log "USB权限已请求"
     else
         echo "⚠️  USB权限请求失败，请手动授权"
-        echo "请在Termux弹出的对话框中授权USB访问"
-        echo "或进入手机设置 → 应用 → Termux → 权限 → 开启USB权限"
+        log "USB权限请求失败"
     fi
     
-    # 确保备份目录存在
+    # 创建备份目录
     mkdir -p "$BACKUP_DIR"
     echo -e "\n📁 备份目录: $BACKUP_DIR"
+    
+    echo -e "\n✅ 依赖安装完成"
+    read -p "按回车键继续..."
 }
 
-# 2. 检测设备状态并帮助进入fastboot模式
-check_device_and_help() {
-    echo -e "\n\033[32m=== 步骤2：检查设备状态 ===\033[0m"
+# 2. 检测设备状态
+check_device_status() {
+    log "=== 开始检测设备状态 ==="
+    echo -e "\n${GREEN}=== 设备状态检测 ===${NC}"
     
-    # 首先检查fastboot设备
-    echo -e "\n🔍 检测fastboot设备..."
+    echo "🔍 检测fastboot设备..."
     fastboot_devices=$(fastboot devices 2>/dev/null | grep -v "List of devices attached")
     
     if [ -n "$fastboot_devices" ]; then
-        echo "✅ 已检测到设备处于fastboot模式"
-        echo "连接的fastboot设备:"
+        echo "✅ 检测到设备处于fastboot模式"
         echo "$fastboot_devices"
-        return 0
-    fi
-    
-    # 如果没有fastboot设备，检查ADB设备
-    echo -e "\n🔍 检测ADB设备..."
-    adb_devices=$(adb devices 2>/dev/null | tail -n +2 | grep -v "List of devices attached")
-    
-    if [ -n "$adb_devices" ]; then
-        echo "⚠️  设备处于Android系统模式（未在fastboot模式）"
-        echo "连接的ADB设备:"
-        echo "$adb_devices"
+        DEVICE_STATE="fastboot"
         
-        # 解析设备状态
-        device_line=$(echo "$adb_devices" | head -1)
-        if echo "$device_line" | grep -q "unauthorized"; then
-            DEVICE_STATE="unauthorized"
-            echo "❌ 设备未授权ADB调试"
-            show_authorization_help
-            return 1
-        elif echo "$device_line" | grep -q "offline"; then
-            DEVICE_STATE="offline"
-            echo "❌ 设备处于离线状态"
-            show_offline_help
-            return 1
-        else
-            DEVICE_STATE="normal"
-            echo "✅ 设备已连接并授权ADB调试"
-            show_fastboot_help
-            return 1
+        # 检测当前slot（如果有选择设备）
+        if [ -n "$TARGET_DEVICE" ] && [ -n "$SELECTED_VID" ]; then
+            echo "🔍 检测A/B分区状态..."
+            slot_info=$(fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar current-slot 2>/dev/null)
+            if echo "$slot_info" | grep -q "current-slot: [ab]"; then
+                CURRENT_SLOT=$(echo "$slot_info" | grep -o "[ab]" | head -1)
+                echo "📊 当前slot: $CURRENT_SLOT"
+                log "检测到当前slot: $CURRENT_SLOT"
+            else
+                echo "📊 未检测到A/B分区或设备不支持"
+                CURRENT_SLOT=""
+            fi
         fi
     else
-        echo "❌ 未检测到任何连接的Android设备"
-        show_no_device_help
-        return 1
+        echo "🔍 检测ADB设备..."
+        adb_devices=$(adb devices 2>/dev/null | tail -n +2 | grep -v "List of devices attached")
+        
+        if [ -n "$adb_devices" ]; then
+            device_line=$(echo "$adb_devices" | head -1)
+            if echo "$device_line" | grep -q "unauthorized"; then
+                DEVICE_STATE="unauthorized"
+                echo "❌ 设备未授权ADB调试"
+            elif echo "$device_line" | grep -q "offline"; then
+                DEVICE_STATE="offline"
+                echo "❌ 设备处于离线状态"
+            else
+                DEVICE_STATE="normal"
+                echo "✅ 设备已连接并授权ADB调试"
+                echo "$adb_devices"
+            fi
+        else
+            DEVICE_STATE="disconnected"
+            echo "❌ 未检测到任何连接的Android设备"
+        fi
     fi
-}
-
-# 显示ADB授权帮助
-show_authorization_help() {
-    echo -e "\n📱 如何授权ADB调试："
-    echo "1. 确保手机上已开启「开发者选项」"
-    echo "   （设置 → 关于手机 → 连续点击版本号7次）"
-    echo "2. 返回设置 → 系统 → 开发者选项"
-    echo "3. 开启「USB调试」开关"
-    echo "4. 连接USB后，手机上会弹出授权对话框"
-    echo "5. 勾选「始终允许此计算机」并点击「确定」"
-    echo "6. 等待5秒，然后按回车键继续..."
-    read -p ""
     
-    # 重新检测
-    echo -e "\n🔄 重新检测设备..."
-    check_device_and_help
-}
-
-# 显示离线设备帮助
-show_offline_help() {
-    echo -e "\n🔌 设备离线解决方法："
-    echo "1. 重新拔插USB线"
-    echo "2. 在手机上切换USB连接模式："
-    echo "   - 从通知栏选择「文件传输」或「MTP」模式"
-    echo "   - 不要选择「仅充电」模式"
-    echo "3. 重新运行此脚本"
-    exit 1
-}
-
-# 显示无设备连接帮助
-show_no_device_help() {
-    echo -e "\n🔍 未检测到设备可能的原因："
-    echo "1. USB线连接问题："
-    echo "   - 使用原装或支持数据传输的USB线"
-    echo "   - 尝试更换USB端口"
-    echo "   - 确保双C线支持数据传输（非仅充电）"
-    echo "2. 手机设置问题："
-    echo "   - 打开「开发者选项」（关于手机 → 连续点击版本号）"
-    echo "   - 开启「USB调试」"
-    echo "   - 开启「OEM解锁」（如果还没解锁BL）"
-    echo "3. Termux权限问题："
-    echo "   - 确保Termux有USB访问权限"
-    echo "   - 重启Termux重新授权"
-    echo "4. 硬件问题："
-    echo "   - 确保操作手机支持USB OTG功能"
-    echo "   - 尝试用电脑连接测试线缆"
+    echo -e "\n📊 设备状态: $DEVICE_STATE"
+    log "设备状态: $DEVICE_STATE"
     
-    echo -e "\n💡 尝试以下命令检查连接："
-    echo "1. 重新请求USB权限: termux-usb -r"
-    echo "2. 列出USB设备: termux-usb -l"
-    echo "3. 检查ADB设备: adb devices"
-    echo "4. 检查fastboot设备: fastboot devices"
-    
-    echo -e "\n是否要重新检测设备？(y/n)"
-    read -p "选择: " retry_choice
-    if [ "$retry_choice" = "y" ]; then
-        echo -e "\n🔄 重新检测设备..."
-        check_device_and_help
-    else
-        echo "退出脚本"
-        exit 1
-    fi
+    read -p "按回车键继续..."
 }
 
-# 显示进入fastboot帮助
-show_fastboot_help() {
-    echo -e "\n⚡ 如何进入fastboot模式："
-    echo ""
-    echo "方法1：通过ADB命令进入（推荐）"
-    echo "   在手机已连接并授权的情况下，运行："
-    echo "   adb reboot bootloader"
+# 3. 帮助进入fastboot模式
+help_enter_fastboot() {
+    log "=== 显示fastboot帮助 ==="
+    echo -e "\n${GREEN}=== 进入fastboot模式帮助 ===${NC}"
+    
+    echo "方法1：通过ADB命令（推荐）"
+    echo "  在手机已连接并授权的情况下，运行："
+    echo "  adb reboot bootloader"
     echo ""
     echo "方法2：物理按键组合（通用方法）"
-    echo "   1. 完全关机（长按电源键 → 关机）"
-    echo "   2. 同时按住「音量下键 + 电源键」"
-    echo "   3. 看到fastboot界面后松开"
+    echo "  1. 完全关机（长按电源键 → 关机）"
+    echo "  2. 同时按住「音量下键 + 电源键」"
+    echo "  3. 看到fastboot界面后松开"
     echo ""
     echo "方法3：一加专用方法"
-    echo "   1. 关机"
-    echo "   2. 同时按住「音量上键 + 音量下键 + 电源键」"
-    echo "   3. 看到fastboot界面后松开"
+    echo "  1. 关机"
+    echo "  2. 同时按住「音量上键 + 音量下键 + 电源键」"
+    echo "  3. 看到fastboot界面后松开"
+    echo ""
+    echo "方法4：通过Recovery进入"
+    echo "  1. 进入Recovery模式（音量上+电源）"
+    echo "  2. 选择「Advanced」→「Reboot to bootloader」"
     
-    echo -e "\n🔧 选择进入fastboot的方法："
-    echo "1. 使用ADB命令自动进入fastboot"
-    echo "2. 手动按键进入（按上述方法操作）"
-    echo "3. 查看详细的按键进入指南"
-    echo "4. 退出脚本"
+    echo -e "\n是否要通过ADB自动进入fastboot？(y/n)"
+    read -p "选择: " choice
     
-    read -p "请输入选项 (1-4): " fastboot_method
+    if [ "$choice" = "y" ]; then
+        echo "正在通过ADB重启到fastboot模式..."
+        adb reboot bootloader
+        echo "✅ 已发送重启命令，请等待15秒..."
+        sleep 15
+        log "已发送ADB重启到fastboot命令"
+    fi
     
-    case $fastboot_method in
-        1)
-            echo -e "\n正在通过ADB重启到fastboot模式..."
-            adb reboot bootloader
-            echo "✅ 已发送重启命令，请等待设备进入fastboot模式"
-            echo "⏳ 等待15秒让设备切换模式..."
-            sleep 15
-            
-            # 检查是否成功进入fastboot
-            echo -e "\n检查fastboot设备..."
-            fastboot_devices=$(fastboot devices 2>/dev/null | grep -v "List of devices attached")
-            if [ -n "$fastboot_devices" ]; then
-                echo "✅ 成功进入fastboot模式！"
-                echo "检测到的设备："
-                echo "$fastboot_devices"
-            else
-                echo "❌ 仍未检测到fastboot设备"
-                echo "请手动按键进入fastboot模式"
-                show_fastboot_help
-            fi
-            ;;
-        2)
-            echo -e "\n请按照上述方法手动进入fastboot模式"
-            echo "完成后按回车键继续..."
-            read -p ""
-            
-            # 检查是否成功
-            fastboot_devices=$(fastboot devices 2>/dev/null | grep -v "List of devices attached")
-            if [ -n "$fastboot_devices" ]; then
-                echo "✅ 成功进入fastboot模式！"
-            else
-                echo "❌ 未检测到fastboot设备"
-                echo "是否要重新尝试？(y/n)"
-                read -p "选择: " retry_choice
-                if [ "$retry_choice" = "y" ]; then
-                    show_fastboot_help
-                else
-                    echo "退出脚本"
-                    exit 1
-                fi
-            fi
-            ;;
-        3)
-            show_detailed_fastboot_guide
-            echo -e "\n按回车键返回..."
-            read -p ""
-            show_fastboot_help
-            ;;
-        4)
-            echo "退出脚本"
-            exit 0
-            ;;
-        *)
-            echo "❌ 无效选择，返回"
-            show_fastboot_help
-            ;;
-    esac
+    read -p "按回车键继续..."
 }
 
-# 显示详细的fastboot指南
-show_detailed_fastboot_guide() {
-    echo -e "\n📖 详细的fastboot模式进入指南"
-    echo "========================================"
-    echo ""
-    echo "💡 什么是fastboot模式？"
-    echo "   fastboot是Android设备的刷机模式，用于刷写系统镜像、解锁BL等操作"
-    echo ""
-    echo "📱 通用进入方法："
-    echo "   1. 确保手机已完全关机"
-    echo "   2. 同时按住「音量下键 + 电源键」"
-    echo "   3. 保持按住直到看到fastboot界面（通常是安卓机器人或品牌logo）"
-    echo "   4. 松开按键"
-    echo ""
-    echo "🎯 一加手机专用方法："
-    echo "   方法A：音量上下键 + 电源键"
-    echo "   方法B：关机后连接电脑，执行：adb reboot bootloader"
-    echo ""
-    echo "⚡ 其他品牌参考："
-    echo "   - 小米/Redmi：音量下键 + 电源键"
-    echo "   - 三星：音量下键 + Bixby键 + 电源键"
-    echo "   - 华为：音量下键 + 电源键（连接电脑）"
-    echo "   - OPPO/真我：音量上下键 + 电源键"
-    echo ""
-    echo "🔍 如何判断已进入fastboot："
-    echo "   ✓ 屏幕显示fastboot字样或安卓机器人"
-    echo "   ✓ 屏幕可能显示「Start」或其他fastboot菜单"
-    echo "   ✓ 通常屏幕不会显示完整的系统界面"
-    echo ""
-    echo "⚠️  常见问题："
-    echo "   Q: 按键没反应怎么办？"
-    echo "   A: 确保手机完全关机，可以长按电源键10秒强制关机后再试"
-    echo ""
-    echo "   Q: 进入的是Recovery模式怎么办？"
-    echo "   A: 尝试「音量上键 + 电源键」进入Recovery后，选择「Reboot to bootloader」"
-    echo ""
-    echo "   Q: 屏幕一直黑屏？"
-    echo "   A: 可能是电池没电，充电后再试"
-}
-
-# 3. 检测设备+强制锁定第一台（用户输入1即可选中，全程绑定）
-select_first_device() {
-    echo -e "\n\033[32m=== 步骤3：检测设备并锁定第一台 ===\033[0m"
-    echo "⚠️  被控机需进入fastboot模式，OTG已连接，Termux已获取USB权限"
-
-    # 全量检测设备
+# 4. 选择并锁定设备
+select_and_lock_device() {
+    log "=== 开始选择设备 ==="
+    echo -e "\n${GREEN}=== 选择并锁定设备 ===${NC}"
+    
     DEVICES=$(fastboot devices | grep -v "List of devices attached")
     if [ -z "$DEVICES" ]; then
         echo "❌ 未检测到任何fastboot设备！"
-        echo "请确保："
-        echo "1. 设备已进入fastboot模式"
-        echo "2. USB线连接正常"
-        echo "3. Termux已获得USB权限"
-        echo ""
-        echo "是否要重新检测设备状态？(y/n)"
-        read -p "选择: " retry_choice
-        if [ "$retry_choice" = "y" ]; then
-            check_device_and_help
-            # 重新检测fastboot设备
-            DEVICES=$(fastboot devices | grep -v "List of devices attached")
-            if [ -z "$DEVICES" ]; then
-                echo "❌ 仍无fastboot设备，退出"
-                exit 1
-            fi
-        else
-            echo "退出脚本"
-            exit 1
-        fi
+        echo "请确保设备已进入fastboot模式"
+        log "未检测到fastboot设备"
+        read -p "按回车键返回..."
+        return 1
     fi
-
-    # 列出设备并标注序号，强调第一台选项
+    
     echo -e "\n✅ 检测到以下设备："
     echo "$DEVICES" | awk '{print NR ". " $0}'
     readarray -t DEVICE_ARRAY <<< "$DEVICES"
-
-    # 引导用户选第一台，也支持选其他，但选定后锁定
-    read -p "请输入设备序号（输入1直接选中第一台，选定后全程锁定）：" device_index
+    
+    read -p "请输入设备序号（选定后全程锁定）：" device_index
     if ! [[ "$device_index" =~ ^[0-9]+$ ]] || [ "$device_index" -lt 1 ] || [ "$device_index" -gt "${#DEVICE_ARRAY[@]}" ]; then
-        echo "❌ 无效序号，退出"
-        exit 1
+        echo "❌ 无效序号"
+        return 1
     fi
-
-    # 绑定选中的设备（永久锁定）
+    
     selected_line="${DEVICE_ARRAY[$((device_index-1))]}"
     TARGET_DEVICE=$(echo "$selected_line" | awk '{print $1}')
-    echo -e "\033[32m✅ 已锁定目标设备：$TARGET_DEVICE\033[0m"
-    echo "⚠️  后续所有操作仅针对此设备，无二次选择"
+    echo -e "\n✅ 已锁定目标设备：$TARGET_DEVICE"
+    log "已选择设备: $TARGET_DEVICE"
+    
+    # 检测设备是否支持A/B分区
+    if [ -n "$SELECTED_VID" ]; then
+        echo "🔍 检测设备A/B分区信息..."
+        slot_info=$(fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar current-slot 2>/dev/null)
+        if echo "$slot_info" | grep -q "current-slot: [ab]"; then
+            CURRENT_SLOT=$(echo "$slot_info" | grep -o "[ab]" | head -1)
+            echo "✅ 设备支持A/B分区，当前slot: $CURRENT_SLOT"
+        else
+            echo "⚠️  设备可能不支持A/B分区或无法检测"
+            CURRENT_SLOT=""
+        fi
+    fi
+    
+    read -p "按回车键继续..."
 }
 
-# 4. 选择VID（适配不同品牌）
-select_vid() {
-    echo -e "\n\033[32m=== 步骤4：选择设备USB供应商ID（VID）===\033[0m"
+# 5. 选择VID
+select_vid_menu() {
+    log "=== 开始选择VID ==="
+    echo -e "\n${GREEN}=== 选择设备USB供应商ID（VID）===${NC}"
+    
+    if [ -z "$TARGET_DEVICE" ]; then
+        echo "❌ 请先选择设备！"
+        read -p "按回车键返回..."
+        return 1
+    fi
+    
     echo "💡 常见VID推荐："
     echo "1. 一加/OPPO/真我：0x2a70"
     echo "2. 小米/Redmi：0x2717"
@@ -379,34 +319,57 @@ select_vid() {
         0)
             read -p "输入自定义VID：" custom_vid
             if ! [[ "$custom_vid" =~ ^0x[0-9A-Fa-f]{4}$ ]]; then
-                echo "❌ 格式错误，退出"
-                exit 1
+                echo "❌ 格式错误"
+                return 1
             fi
             SELECTED_VID="$custom_vid"
             ;;
-        *) echo "❌ 无效选择，退出"; exit 1 ;;
+        *) echo "❌ 无效选择"; return 1 ;;
     esac
-
-    # 验证锁定设备+VID的通信
+    
     echo -e "\n验证 $SELECTED_VID + $TARGET_DEVICE 通信..."
     if fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar product >/dev/null 2>&1; then
         echo "✅ 通信验证成功！"
+        log "VID选择成功: $SELECTED_VID"
+        
+        # 检测slot信息
+        echo "🔍 检测设备A/B分区信息..."
+        slot_info=$(fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar current-slot 2>/dev/null)
+        if echo "$slot_info" | grep -q "current-slot: [ab]"; then
+            CURRENT_SLOT=$(echo "$slot_info" | grep -o "[ab]" | head -1)
+            echo "✅ 设备支持A/B分区，当前slot: $CURRENT_SLOT"
+        else
+            echo "⚠️  设备可能不支持A/B分区或无法检测"
+            CURRENT_SLOT=""
+        fi
     else
-        echo "❌ 通信失败，请重新选VID或检查连接"
-        exit 1
+        echo "❌ 通信失败"
+        SELECTED_VID=""
     fi
+    
+    read -p "按回车键继续..."
 }
 
-# 5. 输入解锁命令（仅针对锁定设备）- 修改版
-input_unlock_cmd() {
-    echo -e "\n\033[32m=== 步骤5：解锁 $TARGET_DEVICE ===\033[0m"
-    echo "💡 选择解锁方式："
-    echo "1. 标准解锁 (fastboot flashing unlock) - 适用于大多数一加/OPPO设备"
+# 6. 解锁Bootloader
+unlock_bootloader() {
+    log "=== 开始解锁Bootloader ==="
+    echo -e "\n${GREEN}=== 解锁Bootloader ===${NC}"
+    
+    if [ -z "$TARGET_DEVICE" ] || [ -z "$SELECTED_VID" ]; then
+        echo "❌ 请先选择设备和VID！"
+        read -p "按回车键返回..."
+        return 1
+    fi
+    
+    echo "⚠️  警告：解锁Bootloader会清除设备所有数据！"
+    echo "⚠️  请确保已备份重要数据！"
+    echo ""
+    
+    echo "选择解锁方式："
+    echo "1. 标准解锁 (fastboot flashing unlock)"
     echo "2. 老机型解锁 (fastboot oem unlock)"
     echo "3. 自定义解锁命令"
-    echo "⚠️  解锁会清除设备所有数据！"
-    
-    read -p "选择解锁方式 (1/2/3): " unlock_type
+    read -p "选择 (1/2/3): " unlock_type
     
     case $unlock_type in
         1)
@@ -419,139 +382,619 @@ input_unlock_cmd() {
             ;;
         3)
             read -p "输入完整解锁命令：" unlock_cmd
-            # 移除eval，直接执行命令
             $unlock_cmd
             ;;
         *)
-            echo "❌ 无效选择，退出"
-            exit 1
+            echo "❌ 无效选择"
+            return 1
             ;;
     esac
     
     if [ $? -eq 0 ]; then
-        echo "✅ 解锁完成！请重启设备并重新进入fastboot模式"
-        echo "⏳ 等待设备重启..."
-        sleep 5
-        
-        # 提示用户如何重新进入fastboot
-        echo -e "\n📱 解锁后需要重新进入fastboot模式："
-        echo "方法1：使用ADB命令"
-        echo "   在设备重启进入系统后，运行：adb reboot bootloader"
-        echo ""
-        echo "方法2：手动按键"
-        echo "   完全关机 → 按住音量下键 + 电源键"
-        echo ""
-        read -p "已重启并进入fastboot？（y=继续，n=退出）：" rst_confirm
-        [ "$rst_confirm" != "y" ] && echo "退出" && exit 1
+        echo "✅ 解锁完成！"
+        echo "请重启设备并重新进入fastboot模式"
+        log "Bootloader解锁成功"
     else
-        echo "❌ 解锁失败，请检查设备和连接"
-        exit 1
+        echo "❌ 解锁失败"
+        log "Bootloader解锁失败"
     fi
+    
+    read -p "按回车键继续..."
 }
 
-# 6. 选择分区（boot/init_boot）
-select_partition() {
-    echo -e "\n\033[32m=== 步骤6：选择分区类型 ===\033[0m"
+# 7. 选择分区类型
+select_partition_menu() {
+    log "=== 开始选择分区 ==="
+    echo -e "\n${GREEN}=== 选择分区类型 ===${NC}"
+    
     echo "1. 新机型（Android13+/ColorOS16+ → init_boot）"
     echo "2. 老机型（Android12及以下 → boot）"
     read -p "输入选项1/2：" part_choice
+    
     case $part_choice in
         1) SELECTED_PARTITION="init_boot" ;;
         2) SELECTED_PARTITION="boot" ;;
-        *) echo "❌ 无效选择，退出"; exit 1 ;;
+        *) echo "❌ 无效选择"; return 1 ;;
     esac
+    
     echo -e "✅ 选定分区：$SELECTED_PARTITION"
+    log "选择分区: $SELECTED_PARTITION"
+    
+    read -p "按回车键继续..."
 }
 
-# 7. 选择是否备份原厂分区（仅针对锁定设备）- 改进版
-backup_partition() {
-    echo -e "\n\033[32m=== 步骤7：备份原厂 $SELECTED_PARTITION 分区 ===\033[0m"
-    read -p "是否备份？（y=备份，n=跳过）：" backup_choice
-    [ "$backup_choice" != "y" ] && echo "✅ 跳过备份"; return
+# 8. 备份原厂分区
+backup_partition_menu() {
+    log "=== 开始备份分区 ==="
+    echo -e "\n${GREEN}=== 备份原厂分区 ===${NC}"
+    
+    if [ -z "$TARGET_DEVICE" ] || [ -z "$SELECTED_VID" ] || [ -z "$SELECTED_PARTITION" ]; then
+        echo "❌ 请先选择设备、VID和分区类型！"
+        read -p "按回车键返回..."
+        return 1
+    fi
+    
+    read -p "是否备份 $SELECTED_PARTITION 分区？(y/n): " backup_choice
+    [ "$backup_choice" != "y" ] && echo "✅ 跳过备份" && return 0
 
     backup_file="$BACKUP_DIR/backup_${SELECTED_PARTITION}_${TARGET_DEVICE}_$(date +%Y%m%d_%H%M%S).img"
     
-    # 尝试获取当前slot
-    slot=$(fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar current-slot 2>/dev/null | grep -o "[ab]" | head -1)
-    
-    if [ -n "$slot" ]; then
-        echo "检测到A/B分区，当前slot: $slot"
-        partition_name="${SELECTED_PARTITION}${slot}"
+    # 检测slot并询问用户
+    if [ -n "$CURRENT_SLOT" ]; then
+        echo "📊 检测到A/B分区"
+        echo "当前slot: $CURRENT_SLOT"
+        echo ""
+        echo "选择备份方式："
+        echo "1. 备份当前slot ($CURRENT_SLOT)"
+        echo "2. 备份a分区"
+        echo "3. 备份b分区"
+        echo "4. 备份所有slot"
+        read -p "选择 (1/2/3/4): " backup_slot_choice
+        
+        case $backup_slot_choice in
+            1)
+                slot_to_backup="$CURRENT_SLOT"
+                echo "备份当前slot ($CURRENT_SLOT)..."
+                ;;
+            2)
+                slot_to_backup="a"
+                echo "备份a分区..."
+                ;;
+            3)
+                slot_to_backup="b"
+                echo "备份b分区..."
+                ;;
+            4)
+                echo "备份所有slot（a和b）..."
+                # 备份a分区
+                backup_file_a="$BACKUP_DIR/backup_${SELECTED_PARTITION}_${TARGET_DEVICE}_slot-a_$(date +%Y%m%d_%H%M%S).img"
+                echo "备份a分区到: $backup_file_a"
+                if fastboot -i $SELECTED_VID -s $TARGET_DEVICE dump "${SELECTED_PARTITION}a" "$backup_file_a" 2>/dev/null; then
+                    echo "✅ a分区备份完成！"
+                    log "a分区备份成功: $backup_file_a"
+                else
+                    echo "❌ a分区备份失败"
+                fi
+                
+                # 备份b分区
+                backup_file_b="$BACKUP_DIR/backup_${SELECTED_PARTITION}_${TARGET_DEVICE}_slot-b_$(date +%Y%m%d_%H%M%S).img"
+                echo "备份b分区到: $backup_file_b"
+                if fastboot -i $SELECTED_VID -s $TARGET_DEVICE dump "${SELECTED_PARTITION}b" "$backup_file_b" 2>/dev/null; then
+                    echo "✅ b分区备份完成！"
+                    log "b分区备份成功: $backup_file_b"
+                else
+                    echo "❌ b分区备份失败"
+                fi
+                
+                echo "✅ 所有slot备份完成"
+                read -p "按回车键继续..."
+                return 0
+                ;;
+            *)
+                echo "❌ 无效选择，默认备份当前slot"
+                slot_to_backup="$CURRENT_SLOT"
+                ;;
+        esac
+        
+        partition_name="${SELECTED_PARTITION}${slot_to_backup}"
+        backup_file="$BACKUP_DIR/backup_${SELECTED_PARTITION}_${TARGET_DEVICE}_slot-${slot_to_backup}_$(date +%Y%m%d_%H%M%S).img"
     else
-        echo "未检测到A/B分区，使用基本分区名"
+        echo "未检测到A/B分区"
         partition_name="$SELECTED_PARTITION"
     fi
     
     echo "备份到：$backup_file"
-    echo "正在备份 $partition_name 分区..."
     
-    # 尝试fastboot dump备份（适用于支持此命令的设备）
     if fastboot -i $SELECTED_VID -s $TARGET_DEVICE dump $partition_name $backup_file 2>/dev/null; then
         echo "✅ 备份完成！文件: $backup_file"
-        echo "文件大小: $(du -h "$backup_file" | cut -f1)"
+        if [ -f "$backup_file" ]; then
+            echo "文件大小: $(du -h "$backup_file" 2>/dev/null | cut -f1)"
+        fi
+        log "分区备份成功: $backup_file"
     else
-        echo "⚠️  fastboot dump失败，尝试通过recovery备份..."
-        echo "请手动进入TWRP/OrangeFox等recovery备份boot分区"
-        echo "或跳过备份继续操作"
-        read -p "是否继续？（y=继续，n=退出）" continue_choice
-        [ "$continue_choice" != "y" ] && echo "退出" && exit 1
+        echo "❌ 备份失败"
+        log "分区备份失败"
     fi
+    
+    read -p "按回车键继续..."
 }
 
-# 8. 刷入镜像+重启（仅针对锁定设备）
-flash_and_reboot() {
-    echo -e "\n\033[32m=== 步骤8：刷入镜像并重启 $TARGET_DEVICE ===\033[0m"
-    read -p "输入修补后镜像完整路径：" img_path
-    [ ! -f "$img_path" ] && echo "❌ 文件不存在，退出"; exit 1
-
-    echo "开始刷入 $SELECTED_PARTITION 分区..."
-    fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash $SELECTED_PARTITION $img_path
-    if [ $? -eq 0 ]; then
-        echo "✅ 刷入成功！正在重启设备..."
-        fastboot -i $SELECTED_VID -s $TARGET_DEVICE reboot
-        echo "✅ 所有操作完成！设备重启中"
-        echo "⏳ 首次启动可能需要较长时间，请耐心等待"
-    else
-        echo "❌ 刷入失败，请排查BL解锁/镜像匹配/OTG连接"
-        exit 1
+# 9. 刷入镜像文件（添加A/B分区支持）
+flash_image() {
+    log "=== 开始刷入镜像 ==="
+    echo -e "\n${GREEN}=== 刷入镜像文件 ===${NC}"
+    
+    if [ -z "$TARGET_DEVICE" ] || [ -z "$SELECTED_VID" ] || [ -z "$SELECTED_PARTITION" ]; then
+        echo "❌ 请先选择设备、VID和分区类型！"
+        read -p "按回车键返回..."
+        return 1
     fi
-}
-
-# 主流程（全程锁定第一台设备）
-main() {
-    clear
-    echo "========================================"
-    echo "   安卓Fastboot工具箱 v2.0"
-    echo "   支持设备状态检测和fastboot引导"
-    echo "========================================"
+    
+    # 检查设备是否支持A/B分区
+    local has_ab_slots="false"
+    if [ -n "$CURRENT_SLOT" ]; then
+        has_ab_slots="true"
+        echo "✅ 设备支持A/B分区"
+        echo "📊 当前slot: $CURRENT_SLOT"
+    else
+        echo "⚠️  设备可能不支持A/B分区"
+    fi
+    
     echo ""
+    echo "当前目录下的镜像文件："
+    ls -la *.img *.bin 2>/dev/null | head -20 || echo "未找到.img或.bin文件"
     
-    # 步骤1：安装依赖（必须先安装，才能检测设备）
+    echo ""
+    read -p "输入镜像完整路径：" img_path
+    if [ ! -f "$img_path" ]; then
+        echo "❌ 文件不存在: $img_path"
+        read -p "按回车键返回..."
+        return 1
+    fi
+    
+    # 选择刷入方式
+    echo ""
+    echo "${YELLOW}=== 选择刷入方式 ===${NC}"
+    if [ "$has_ab_slots" = "true" ]; then
+        echo "1. 刷入当前活动slot ($CURRENT_SLOT)"
+        echo "2. 刷入a分区"
+        echo "3. 刷入b分区"
+        echo "4. 刷入两个分区（a和b都刷入）"
+        echo "5. 切换活动slot后刷入"
+        echo "6. 传统方式刷入（不分slot）"
+    else
+        echo "1. 传统方式刷入"
+        echo "2. 尝试刷入a分区"
+        echo "3. 尝试刷入b分区"
+    fi
+    
+    read -p "选择刷入方式: " flash_method
+    
+    local flash_cmd=""
+    local reboot_after_flash="false"
+    
+    if [ "$has_ab_slots" = "true" ]; then
+        case $flash_method in
+            1)
+                # 刷入当前slot
+                partition_name="${SELECTED_PARTITION}${CURRENT_SLOT}"
+                echo "刷入当前slot ($CURRENT_SLOT) -> $partition_name"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash $partition_name \"$img_path\""
+                ;;
+            2)
+                # 刷入a分区
+                echo "刷入a分区"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash ${SELECTED_PARTITION}a \"$img_path\""
+                ;;
+            3)
+                # 刷入b分区
+                echo "刷入b分区"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash ${SELECTED_PARTITION}b \"$img_path\""
+                ;;
+            4)
+                # 刷入两个分区
+                echo "刷入两个分区（a和b）..."
+                echo "第一步：刷入a分区"
+                if fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash ${SELECTED_PARTITION}a "$img_path"; then
+                    echo "✅ a分区刷入成功"
+                else
+                    echo "❌ a分区刷入失败"
+                    read -p "按回车键继续..."
+                    return 1
+                fi
+                
+                echo "第二步：刷入b分区"
+                if fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash ${SELECTED_PARTITION}b "$img_path"; then
+                    echo "✅ b分区刷入成功"
+                    echo "✅ 两个分区刷入完成！"
+                    log "A/B分区镜像刷入成功: $img_path"
+                    read -p "是否要重启设备？(y/n): " reboot_choice
+                    if [ "$reboot_choice" = "y" ]; then
+                        echo "重启设备..."
+                        fastboot -i $SELECTED_VID -s $TARGET_DEVICE reboot
+                        echo "✅ 设备重启中"
+                    fi
+                else
+                    echo "❌ b分区刷入失败"
+                    log "b分区刷入失败: $img_path"
+                fi
+                
+                read -p "按回车键继续..."
+                return 0
+                ;;
+            5)
+                # 切换slot后刷入
+                echo "当前slot: $CURRENT_SLOT"
+                if [ "$CURRENT_SLOT" = "a" ]; then
+                    target_slot="b"
+                else
+                    target_slot="a"
+                fi
+                
+                echo "切换到 $target_slot 分区并刷入"
+                echo "第一步：设置活动slot为 $target_slot"
+                if fastboot -i $SELECTED_VID -s $TARGET_DEVICE --set-active="$target_slot" 2>/dev/null; then
+                    echo "✅ 已设置活动slot为 $target_slot"
+                else
+                    echo "⚠️  无法设置活动slot，尝试继续刷入"
+                fi
+                
+                echo "第二步：刷入 $target_slot 分区"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash ${SELECTED_PARTITION}${target_slot} \"$img_path\""
+                reboot_after_flash="true"
+                ;;
+            6)
+                # 传统方式
+                echo "传统方式刷入（不分slot）"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash $SELECTED_PARTITION \"$img_path\""
+                ;;
+            *)
+                echo "❌ 无效选择，使用传统方式刷入"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash $SELECTED_PARTITION \"$img_path\""
+                ;;
+        esac
+    else
+        # 不支持A/B分区的设备
+        case $flash_method in
+            1)
+                echo "传统方式刷入"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash $SELECTED_PARTITION \"$img_path\""
+                ;;
+            2)
+                echo "尝试刷入a分区"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash ${SELECTED_PARTITION}a \"$img_path\""
+                ;;
+            3)
+                echo "尝试刷入b分区"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash ${SELECTED_PARTITION}b \"$img_path\""
+                ;;
+            *)
+                echo "❌ 无效选择，使用传统方式刷入"
+                flash_cmd="fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash $SELECTED_PARTITION \"$img_path\""
+                ;;
+        esac
+    fi
+    
+    echo ""
+    echo "执行命令: $flash_cmd"
+    echo ""
+    read -p "确认刷入？(y/n): " confirm
+    if [ "$confirm" != "y" ]; then
+        echo "❌ 取消刷入"
+        return 0
+    fi
+    
+    echo "开始刷入..."
+    eval $flash_cmd
+    flash_result=$?
+    
+    if [ $flash_result -eq 0 ]; then
+        echo "✅ 刷入成功！"
+        log "镜像刷入成功: $img_path, 命令: $flash_cmd"
+        
+        if [ "$reboot_after_flash" = "true" ]; then
+            echo "重启设备以使新slot生效..."
+            fastboot -i $SELECTED_VID -s $TARGET_DEVICE reboot
+            echo "✅ 设备重启中"
+        else
+            read -p "是否要重启设备？(y/n): " reboot_choice
+            if [ "$reboot_choice" = "y" ]; then
+                echo "重启设备..."
+                fastboot -i $SELECTED_VID -s $TARGET_DEVICE reboot
+                echo "✅ 设备重启中"
+            fi
+        fi
+    else
+        echo "❌ 刷入失败"
+        log "镜像刷入失败: $img_path, 命令: $flash_cmd"
+    fi
+    
+    read -p "按回车键继续..."
+    return $flash_result
+}
+
+# 10. 一键自动流程
+auto_process() {
+    log "=== 开始一键自动流程 ==="
+    echo -e "\n${GREEN}=== 一键自动流程 ===${NC}"
+    echo "这将按顺序执行："
+    echo "1. 安装依赖"
+    echo "2. 检测设备状态"
+    echo "3. 选择设备"
+    echo "4. 选择VID"
+    echo "5. 解锁Bootloader"
+    echo "6. 选择分区"
+    echo "7. 备份分区"
+    echo "8. 刷入镜像"
+    echo ""
+    read -p "是否继续？(y/n): " confirm
+    [ "$confirm" != "y" ] && return 0
+    
+    # 保存当前状态
+    local old_device="$TARGET_DEVICE"
+    local old_vid="$SELECTED_VID"
+    local old_partition="$SELECTED_PARTITION"
+    local old_slot="$CURRENT_SLOT"
+    
+    # 重置状态
+    TARGET_DEVICE=""
+    SELECTED_VID=""
+    SELECTED_PARTITION=""
+    CURRENT_SLOT=""
+    
+    # 执行流程
     install_deps
+    check_device_status
+    select_and_lock_device
+    select_vid_menu
+    unlock_bootloader
     
-    # 步骤2：检查设备状态并帮助进入fastboot
-    check_device_and_help
+    echo "请重启设备并重新进入fastboot模式后继续..."
+    read -p "按回车键继续..."
     
-    # 步骤3：选择设备
-    select_first_device
+    select_partition_menu
+    backup_partition_menu
     
-    # 步骤4：选择VID
-    select_vid
+    echo "请准备好要刷入的镜像文件..."
+    read -p "按回车键继续..."
     
-    # 步骤5：解锁
-    input_unlock_cmd
+    flash_image
     
-    # 步骤6：选择分区
-    select_partition
+    # 恢复状态
+    TARGET_DEVICE="$old_device"
+    SELECTED_VID="$old_vid"
+    SELECTED_PARTITION="$old_partition"
+    CURRENT_SLOT="$old_slot"
+}
+
+# 11. 查看设备信息
+show_device_info() {
+    echo -e "\n${GREEN}=== 设备信息 ===${NC}"
     
-    # 步骤7：备份
-    backup_partition
+    if [ -z "$TARGET_DEVICE" ]; then
+        echo "❌ 未选择设备"
+    else
+        echo "设备序列号: $TARGET_DEVICE"
+        
+        if [ -n "$SELECTED_VID" ]; then
+            echo ""
+            echo "🔍 获取设备详细信息..."
+            echo "========================================"
+            
+            # 获取基础信息
+            echo "📱 基础信息:"
+            fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar version 2>/dev/null | head -5
+            fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar product 2>/dev/null | head -5
+            fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar variant 2>/dev/null | head -5
+            
+            # 获取slot信息
+            echo ""
+            echo "🔄 Slot信息:"
+            fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar current-slot 2>/dev/null | head -5
+            fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar slot-count 2>/dev/null | head -5
+            fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar slot-suffixes 2>/dev/null | head -5
+            
+            # 获取解锁状态
+            echo ""
+            echo "🔓 解锁状态:"
+            fastboot -i $SELECTED_VID -s $TARGET_DEVICE getvar unlocked 2>/dev/null | head -5
+            
+            echo "========================================"
+        fi
+    fi
     
-    # 步骤8：刷入镜像
-    flash_and_reboot
+    read -p "按回车键继续..."
+}
+
+# 12. 查看备份文件
+show_backup_files() {
+    echo -e "\n${GREEN}=== 备份文件列表 ===${NC}"
+    
+    if [ -d "$BACKUP_DIR" ]; then
+        echo "备份目录: $BACKUP_DIR"
+        echo ""
+        
+        # 显示备份文件详情
+        local backup_count=0
+        for backup_file in "$BACKUP_DIR"/*.img; do
+            [ -e "$backup_file" ] || continue
+            backup_count=$((backup_count + 1))
+            filename=$(basename "$backup_file")
+            filesize=$(du -h "$backup_file" 2>/dev/null | cut -f1)
+            filedate=$(stat -c %y "$backup_file" 2>/dev/null | cut -d' ' -f1) || filedate="未知"
+            
+            echo "📄 $filename"
+            echo "   大小: $filesize | 日期: $filedate"
+            
+            # 显示slot信息（如果文件名中包含slot）
+            if echo "$filename" | grep -q "slot-a"; then
+                echo "   Slot: a分区"
+            elif echo "$filename" | grep -q "slot-b"; then
+                echo "   Slot: b分区"
+            fi
+            
+            echo ""
+        done
+        
+        if [ $backup_count -eq 0 ]; then
+            echo "暂无备份文件"
+        else
+            echo "总备份文件数量: $backup_count"
+        fi
+    else
+        echo "备份目录不存在"
+    fi
+    
+    read -p "按回车键继续..."
+}
+
+# 13. 清理临时文件
+clean_temp_files() {
+    echo -e "\n${GREEN}=== 清理临时文件 ===${NC}"
+    
+    echo "清理Termux临时文件..."
+    rm -f /data/data/com.termux/files/usr/tmp/* 2>/dev/null
+    
+    echo "清理脚本临时文件..."
+    rm -f /tmp/fastboot_*.sh 2>/dev/null
+    
+    echo "清理日志文件？(y/n)"
+    read -p "选择: " clean_logs
+    if [ "$clean_logs" = "y" ]; then
+        if [ -f "$LOG_FILE" ]; then
+            rm -f "$LOG_FILE"
+            echo "✅ 日志文件已清理"
+        else
+            echo "⚠️  日志文件不存在"
+        fi
+    fi
+    
+    echo "✅ 清理完成"
+    
+    read -p "按回车键继续..."
+}
+
+# 14. 查看操作日志
+show_logs() {
+    echo -e "\n${GREEN}=== 操作日志 ===${NC}"
+    
+    if [ -f "$LOG_FILE" ]; then
+        echo "日志文件: $LOG_FILE"
+        echo "文件大小: $(du -h "$LOG_FILE" 2>/dev/null | cut -f1)"
+        echo "最后修改: $(stat -c %y "$LOG_FILE" 2>/dev/null | cut -d' ' -f1,2)"
+        echo ""
+        
+        echo "选择查看方式："
+        echo "1. 查看最后20条日志"
+        echo "2. 查看今天的所有日志"
+        echo "3. 查看全部日志"
+        echo "4. 搜索特定关键词"
+        read -p "选择 (1/2/3/4): " log_choice
+        
+        echo "========================================"
+        case $log_choice in
+            1)
+                tail -20 "$LOG_FILE"
+                ;;
+            2)
+                today=$(date '+%Y-%m-%d')
+                grep "^\[$today" "$LOG_FILE" || echo "今天没有日志记录"
+                ;;
+            3)
+                cat "$LOG_FILE"
+                ;;
+            4)
+                read -p "输入搜索关键词: " search_keyword
+                grep -i "$search_keyword" "$LOG_FILE" || echo "未找到相关日志"
+                ;;
+            *)
+                tail -20 "$LOG_FILE"
+                ;;
+        esac
+        echo "========================================"
+    else
+        echo "暂无日志文件"
+    fi
+    
+    read -p "按回车键继续..."
+}
+
+# 主循环
+main() {
+    while true; do
+        show_header
+        show_menu
+        
+        read choice
+        
+        case $choice in
+            0)
+                echo -e "\n${GREEN}感谢使用，再见！${NC}"
+                log "用户退出系统"
+                exit 0
+                ;;
+            1)
+                install_deps
+                ;;
+            2)
+                check_device_status
+                ;;
+            3)
+                help_enter_fastboot
+                ;;
+            4)
+                select_and_lock_device
+                ;;
+            5)
+                select_vid_menu
+                ;;
+            6)
+                unlock_bootloader
+                ;;
+            7)
+                select_partition_menu
+                ;;
+            8)
+                backup_partition_menu
+                ;;
+            9)
+                flash_image
+                ;;
+            10)
+                auto_process
+                ;;
+            11)
+                show_device_info
+                ;;
+            12)
+                show_backup_files
+                ;;
+            13)
+                clean_temp_files
+                ;;
+            14)
+                show_logs
+                ;;
+            *)
+                echo -e "\n${RED}无效选择，请重新输入${NC}"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # 异常处理
-trap 'echo -e "\n❌ 脚本被中断，操作未完成"; exit 1' INT TERM
+trap 'echo -e "\n${RED}程序被中断${NC}"; log "程序被用户中断"; exit 1' INT TERM
 
+# 初始化日志
+echo "=== Fastboot工具箱启动 $(date '+%Y-%m-%d %H:%M:%S') ===" > "$LOG_FILE"
+
+if [ ! -f "$HOME/.fastboot_tool_installed" ]; then
+    echo -e "${YELLOW}首次运行检测到依赖可能未安装${NC}"
+    echo -e "${YELLOW}建议先选择选项1安装依赖${NC}"
+    touch "$HOME/.fastboot_tool_installed"
+    sleep 2
+fi
+
+# 启动主程序
 main
