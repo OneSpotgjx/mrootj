@@ -32,8 +32,8 @@
 bash
   
 # 1. 克隆仓库
-git clone https://github.com/你的用户名/oneplus-fastboot-toolkit.git
-cd oneplus-fastboot-toolkit
+git clone https://github.com/OneSpotgjx/mrootj.git
+cd mrootj
 
 # 2. 添加执行权限
 chmod +x mrootjbl.sh
