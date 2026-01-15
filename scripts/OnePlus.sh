@@ -685,7 +685,7 @@ flash_image() {
     fi
     
     echo "开始刷入..."
-    safe_fastboot flash "$partition_name" "$img_path"
+    fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash "$partition_name" "$img_path"
 
     flash_result=$?
     
