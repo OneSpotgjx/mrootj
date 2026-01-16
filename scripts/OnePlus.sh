@@ -3,6 +3,29 @@
 # 一加Fastboot工具箱 v2.0 - 菜单版
 # 作者: 复活nb666
 # ====================================================
+# === 自动配置“一加工具箱”快捷命令（只在第一次运行时执行） ===
+
+TOOL_NAME="一加工具箱"
+SCRIPT_PATH="$(realpath "$0")"
+BASHRC="$HOME/.bashrc"
+MARKER="# OnePlus Toolbox Alias"
+
+if ! grep -q "$MARKER" "$BASHRC" 2>/dev/null; then
+    echo ""
+    echo "🔧 正在为你配置快捷启动命令：$TOOL_NAME"
+
+    {
+        echo ""
+        echo "$MARKER"
+        echo "alias $TOOL_NAME='bash \"$SCRIPT_PATH\"'"
+    } >> "$BASHRC"
+
+    echo "✅ 已配置完成"
+    echo "👉 以后重新打开 Termux 后，直接输入：$TOOL_NAME"
+    echo "👉 当前终端请执行：source ~/.bashrc"
+    echo ""
+fi
+
 
 # 常量定义
 BACKUP_DIR="$HOME/fastboot_backup"
@@ -685,7 +708,8 @@ flash_image() {
     fi
     
     echo "开始刷入..."
-    fastboot -i $SELECTED_VID -s $TARGET_DEVICE flash "$partition_name" "$img_path"
+    echo "执行命令: $flash_cmd"
+eval "$flash_cmd"
 
     flash_result=$?
     
