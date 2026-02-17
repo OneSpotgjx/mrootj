@@ -4,11 +4,16 @@
 
 cd mrootj
 
-chmod +x scripts/mrootjbl.sh
+chmod +x OnePlus
 
-./scripts/mrootjbl.sh
+./OnePlus
 
 按提示操作即可。
+另外我们提供了一个备份半成项目
+
+chmod +x OnePlus2
+
+./OnePlus2
 
 📂 init_boot 镜像路径输入说明
 
